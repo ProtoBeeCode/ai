@@ -1,0 +1,192 @@
+' 添加UserForm代码
+Private Type ModelSelection
+    confirmed As Boolean
+    userInput As String
+    modelType As String
+End Type
+
+Function WriteLog(logContent As String)
+    Dim fso As Object
+    Dim logFile As Object
+    Dim logPath As String
+    ' 获取当前Word文档所在目录
+    logPath = ThisDocument.Path & "\deepseek_api_log.txt"
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    ' 如果文件不存在，创建文件
+    If Not fso.FileExists(logPath) Then
+        Set logFile = fso.CreateTextFile(logPath, True)
+    Else
+        Set logFile = fso.OpenTextFile(logPath, 8, True) ' 8 表示追加写入
+    End If
+    ' 写入日志
+    logFile.WriteLine "========== " & Now & " =========="
+    logFile.WriteLine logContent
+    logFile.WriteLine vbCrLf
+    logFile.Close
+    Set fso = Nothing
+End Function
+
+Function ShowInputDialog(Optional defaultText As String = "") As ModelSelection
+    ' 创建并显示自定义输入框
+    Dim result As ModelSelection
+    Dim userInput As String
+    Dim modelInput As String
+    ' 使用InputBox获取用户输入
+    userInput = InputBox("小白ai逆袭：" & vbCrLf & vbCrLf & _
+                        "模型版本：v3(deepseek-chat) 或 r1(deepseek-reasoner)" & vbCrLf & _
+                        "格式：版本号 指令内容" & vbCrLf & _
+                        "示例：v3 帮我总结这段文字" & vbCrLf & vbCrLf & _
+                        "默认使用R1版本", _
+                        "DeepSeek API 设置", defaultText)
+    ' 如果用户取消输入，则返回
+    If userInput = "" Then
+        result.confirmed = False
+        ShowInputDialog = result
+        Exit Function
+    End If
+    ' 解析用户输入，获取模型版本和指令内容
+    If Left(LCase(Trim(userInput)), 2) = "r1" Then
+        modelInput = "deepseek-reasoner"
+        userInput = Mid(Trim(userInput), 3)
+    ElseIf Left(LCase(Trim(userInput)), 2) = "v3" Then
+        modelInput = "deepseek-chat"
+        userInput = Mid(Trim(userInput), 3)
+    Else
+        ' 默认使用R1
+        modelInput = "deepseek-reasoner"
+    End If
+    ' 设置结果
+    result.confirmed = True
+    result.userInput = Trim(userInput)
+    result.modelType = modelInput
+    ShowInputDialog = result
+End Function
+
+Function CallDeepSeekAPI(api_key As String, inputText As String, modelType As String) As String
+    Dim apiUrl As String
+    Dim requestBody As String
+    Dim httpRequest As Object
+    Dim status_code As Integer
+    Dim response As String
+    Dim logContent As String
+    ' 配置API信息
+    apiUrl = "https://api.deepseek.com/v1/chat/completions"
+    ' 处理输入文本中的特殊字符
+    inputText = Replace(inputText, "\", "\\")
+    inputText = Replace(inputText, vbCrLf, " ")
+    inputText = Replace(inputText, vbCr, " ")
+    inputText = Replace(inputText, vbLf, " ")
+    inputText = Replace(inputText, """", "\""")
+    ' 构建请求体
+    requestBody = "{"
+    requestBody = requestBody & """model"": """ & modelType & ""","
+    requestBody = requestBody & """messages"": ["
+    requestBody = requestBody & "{""role"":""system"", ""content"":""You are a Word assistant""},"
+    requestBody = requestBody & "{""role"": ""user"", ""content"": """ & inputText & """}"
+    requestBody = requestBody & "],"
+    requestBody = requestBody & """stream"": false"
+    requestBody = requestBody & "}"
+    ' 记录请求信息
+    logContent = "请求地址：" & apiUrl & vbCrLf & _
+                 "请求内容：" & requestBody & vbCrLf
+    Set httpRequest = CreateObject("MSXML2.XMLHTTP")
+    On Error GoTo ErrorHandler
+    With httpRequest
+        .Open "POST", apiUrl, False
+        .setRequestHeader "Content-Type", "application/json"
+        .setRequestHeader "Authorization", "Bearer " & api_key
+        .send requestBody
+        status_code = .Status
+        response = .responseText
+    End With
+    ' 记录响应信息
+    logContent = logContent & "状态码：" & status_code & vbCrLf & _
+                 "响应内容：" & response
+    Call WriteLog(logContent)
+    If status_code = 200 Then
+        CallDeepSeekAPI = response
+    Else
+        CallDeepSeekAPI = "Error: " & status_code & " - " & response
+    End If
+    Set httpRequest = Nothing
+    Exit Function
+    
+ErrorHandler:
+    logContent = logContent & "错误信息：" & Err.Description
+    Call WriteLog(logContent)
+    CallDeepSeekAPI = "Error: " & Err.Description
+    If Not httpRequest Is Nothing Then Set httpRequest = Nothing
+End Function
+
+Sub DeepSeekV3()
+    Dim api_key As String
+    Dim selectedText As String
+    Dim userInput As String
+    Dim finalInput As String
+    Dim response As String
+    Dim regex As Object
+    Dim matches As Object
+    Dim originalSelection As Range
+    Dim inputResult As ModelSelection
+    Dim modelType As String
+    ' API Key
+    api_key = "您的API密钥"
+    If api_key = "" Then
+        MsgBox "请输入API密钥。", vbExclamation
+        Exit Sub
+    End If
+    ' 获取选中文本（如果有）
+    If Selection.Type = wdSelectionNormal And Len(Selection.Text) > 0 Then
+        selectedText = Selection.Text
+        Set originalSelection = Selection.Range.Duplicate
+    End If
+    ' 显示自定义输入对话框
+    inputResult = ShowInputDialog()
+    ' 如果用户取消输入，则退出
+    If Not inputResult.confirmed Then
+        Exit Sub
+    End If
+    userInput = inputResult.userInput
+    modelType = inputResult.modelType
+    ' 组合最终发送给API的内容
+    If selectedText <> "" Then
+        finalInput = userInput & vbCrLf & "选中的文本：" & vbCrLf & selectedText
+    Else
+        finalInput = userInput
+    End If
+    ' 发送 API 请求
+    response = CallDeepSeekAPI(api_key, finalInput, modelType)
+    ' 处理 API 响应
+    If Left(response, 5) <> "Error" Then
+        ' 解析 JSON
+        Set regex = CreateObject("VBScript.RegExp")
+        With regex
+            .Global = True
+            .MultiLine = True
+            .IgnoreCase = False
+            .Pattern = """content"":""(.*?)"""
+        End With
+        Set matches = regex.Execute(response)
+        If matches.Count > 0 Then
+            ' 提取 API 响应的文本内容
+            response = matches(0).SubMatches(0)
+            ' 处理转义字符
+            response = Replace(response, "\n", vbCrLf)
+            response = Replace(response, "\\", "\")
+            response = Replace(response, "&", "")
+            ' 在文档末尾插入响应
+            Selection.Collapse Direction:=wdCollapseEnd
+            Selection.TypeParagraph
+            Selection.TypeText Text:=response
+            ' 如果之前有选中文本，将光标移回原来选中文本的末尾
+            If Not originalSelection Is Nothing Then
+                originalSelection.Select
+            End If
+        Else
+            MsgBox "无法解析API响应。" & vbCrLf & vbCrLf & _
+                   "API返回内容：" & vbCrLf & response, vbExclamation
+        End If
+    Else
+        MsgBox "API调用失败：" & vbCrLf & Replace(response, "Error: ", ""), vbCritical
+    End If
+End Sub
