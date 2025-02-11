@@ -1,0 +1,176 @@
+Option Explicit
+
+' DeepSeek API配置
+Private Const API_KEY As String = "你的API key"
+Private Const API_URL As String = "https://api.deepseek.com/v1/chat/completions"
+Private Const LOG_FILE As String = "deepseek_api_log.txt"
+
+' 定义模型选择类型
+Private Type ModelSelection
+    confirmed As Boolean
+    userInput As String
+    modelType As String
+End Type
+
+' 主函数
+Sub CallDeepSeekAPI()
+    ' 声明变量
+    Dim inputResult As ModelSelection
+    Dim response As String
+    Dim cellAddress As String
+    
+    ' 获取当前单元格地址
+    cellAddress = ActiveCell.Address
+    
+    ' 获取用户输入和模型选择
+    inputResult = ShowInputDialog()
+    
+    ' 如果用户没有取消输入
+    If inputResult.confirmed Then
+        ' 调用API获取响应
+        response = GetDeepSeekResponse(inputResult.userInput, inputResult.modelType)
+        
+        ' 将响应插入到当前选中的单元格
+        If response <> "" Then
+            ActiveCell.Value = response
+            ' 记录日志
+            WriteToLog inputResult.userInput, cellAddress, response, inputResult.modelType
+        End If
+    End If
+End Sub
+
+' 显示输入对话框函数
+Private Function ShowInputDialog(Optional defaultText As String = "") As ModelSelection
+    Dim result As ModelSelection
+    Dim userInput As String
+    Dim modelInput As String
+    
+    ' 使用InputBox获取用户输入
+    userInput = InputBox("小白ai逆袭-Excel公式助手：" & vbCrLf & vbCrLf & _
+                        "模型版本：v3(deepseek-chat) 或 r1(deepseek-reasoner)" & vbCrLf & _
+                        "格式：版本号 指令内容" & vbCrLf & _
+                        "示例：v3 计算A1和B1的平均值" & vbCrLf & vbCrLf & _
+                        "默认使用V3版本", _
+                        "Excel公式生成器", defaultText)
+    
+    ' 如果用户取消输入，则返回
+    If userInput = "" Then
+        result.confirmed = False
+        ShowInputDialog = result
+        Exit Function
+    End If
+    
+    ' 解析用户输入，获取模型版本和指令内容
+    If Left(LCase(Trim(userInput)), 2) = "r1" Then
+        modelInput = "deepseek-reasoner"
+        userInput = Mid(Trim(userInput), 3)
+    ElseIf Left(LCase(Trim(userInput)), 2) = "v3" Then
+        modelInput = "deepseek-chat"
+        userInput = Mid(Trim(userInput), 3)
+    Else
+        ' 默认使用V3
+        modelInput = "deepseek-chat"
+    End If
+    
+    ' 设置结果
+    result.confirmed = True
+    result.userInput = Trim(userInput)
+    result.modelType = modelInput
+    ShowInputDialog = result
+End Function
+
+' 写入日志的函数
+Private Sub WriteToLog(prompt As String, cellAddr As String, response As String, modelType As String)
+    Dim fso As Object
+    Dim logFile As Object
+    Dim logPath As String
+    Dim logEntry As String
+    
+    ' 创建文件系统对象
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    
+    ' 获取当前工作簿所在目录
+    logPath = ThisWorkbook.Path & "\" & LOG_FILE
+    
+    ' 准备日志内容
+    logEntry = "时间: " & Format(Now, "yyyy-mm-dd hh:mm:ss") & vbCrLf & _
+               "模型类型: " & modelType & vbCrLf & _
+               "请求内容: " & prompt & vbCrLf & _
+               "单元格地址: " & cellAddr & vbCrLf & _
+               "返回内容: " & response & vbCrLf & _
+               "----------------------------------------" & vbCrLf
+    
+    ' 如果文件不存在，创建新文件
+    If Not fso.FileExists(logPath) Then
+        Set logFile = fso.CreateTextFile(logPath)
+    Else
+        Set logFile = fso.OpenTextFile(logPath, 8, True) ' 8 表示追加写入
+    End If
+    
+    ' 写入日志
+    logFile.Write logEntry
+    
+    ' 关闭文件
+    logFile.Close
+    
+    ' 清理对象
+    Set logFile = Nothing
+    Set fso = Nothing
+End Sub
+
+' 调用DeepSeek API的函数
+Private Function GetDeepSeekResponse(prompt As String, modelType As String) As String
+    Dim xmlHttp As Object
+    Dim jsonData As String
+    Dim responseText As String
+    
+    On Error GoTo ErrorHandler
+    
+    ' 创建HTTP请求对象
+    Set xmlHttp = CreateObject("MSXML2.XMLHTTP")
+    
+    ' 准备API请求数据
+    jsonData = "{""model"": """ & modelType & """, ""messages"": [{""role"": ""system"", ""content"": ""你是一个Excel公式专家。用户会描述他们需要的功能，你只需要直接返回对应的Excel公式，不需要任何解释。确保返回的是可以直接在Excel中使用的完整公式。""}, {""role"": ""user"", ""content"": """ & prompt & """}]}"
+    
+    ' 发送请求
+    With xmlHttp
+        .Open "POST", API_URL, False
+        .setRequestHeader "Content-Type", "application/json"
+        .setRequestHeader "Authorization", "Bearer " & API_KEY
+        .send jsonData
+        
+        ' 获取响应
+        If .Status = 200 Then
+            responseText = .responseText
+            ' 从JSON响应中提取内容（这里需要根据实际的API响应格式调整）
+            ' 简单示例，实际使用时可能需要使用JSON解析库
+            GetDeepSeekResponse = ParseJsonResponse(responseText)
+        Else
+            MsgBox "API调用失败: " & .Status & " - " & .statusText
+            GetDeepSeekResponse = ""
+        End If
+    End With
+    
+    Exit Function
+
+ErrorHandler:
+    MsgBox "发生错误: " & Err.Description
+    GetDeepSeekResponse = ""
+End Function
+
+' 解析JSON响应的辅助函数
+Private Function ParseJsonResponse(jsonString As String) As String
+    ' 这是一个简单的实现，实际使用时可能需要更复杂的JSON解析
+    ' 你可以使用第三方JSON解析库来改进这部分
+    Dim startPos As Long
+    Dim endPos As Long
+    
+    startPos = InStr(jsonString, """content"":""") + 11
+    endPos = InStr(startPos, jsonString, """")
+    
+    If startPos > 0 And endPos > 0 Then
+        ParseJsonResponse = Mid(jsonString, startPos, endPos - startPos)
+    Else
+        ParseJsonResponse = "无法解析响应"
+    End If
+End Function
